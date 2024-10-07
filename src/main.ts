@@ -13,6 +13,7 @@ const ThrottlingOctokit = GitHub.plugin(throttling);
 interface ToolInfo {
     owner: string;
     project: string;
+    repoName: string;
     tag: string;
     osPlatform: string;
     osArch: string;
@@ -57,7 +58,10 @@ async function run() {
             && tag !== "latest"
             && tag !== "";
 
-        const [owner, project] = repo.split("/")
+        const [owner, repoName] = repo.split("/")
+
+        // If a project name was manually configured, use it
+        const project = core.getInput("project") ?? repoName;
 
         let osMatch: string[] = []
 
@@ -83,23 +87,25 @@ async function run() {
         core.info(`==> System reported platform: ${os.platform()}`)
         core.info(`==> Using platform: ${osPlatform}`)
 
+        const osArchMatch: string[] = [];
+
         // Determine Architecture
         let osArch = core.getInput("arch");
         if (osArch === "") {
             osArch = os.arch()
             switch (os.arch()) {
                 case "x64":
-                    osMatch.push("x86_64", "x64", "amd64")
+                    osArchMatch.push("x86_64", "x64", "amd64")
                     break;
                 case "arm64":
-                    osMatch.push("aarch64", "arm64")
+                    osArchMatch.push("aarch64", "arm64")
                     break;
                 default:
-                    osMatch.push(os.arch())
+                    osArchMatch.push(os.arch())
                     break;
             }
         } else {
-            osMatch.push(osArch)
+            osArchMatch.push(osArch)
         }
         core.info(`==> System reported arch: ${os.arch()}`)
         core.info(`==> Using arch: ${osArch}`)
@@ -132,6 +138,7 @@ async function run() {
 
         let toolInfo: ToolInfo = {
             owner: owner,
+            repoName: repoName,
             project: project,
             tag: tag,
             osArch: osArch,
@@ -165,22 +172,45 @@ async function run() {
         if (tag === "latest") {
             getReleaseUrl = await octokit.rest.repos.getLatestRelease({
                 owner: owner,
-                repo: project,
+                repo: repoName,
             })
         } else {
             getReleaseUrl = await octokit.rest.repos.getReleaseByTag({
                 owner: owner,
-                repo: project,
+                repo: repoName,
                 tag: tag,
             })
         }
 
+        // Build regular expressions for all the target triple components
+        //
+        // See: https://wiki.osdev.org/Target_Triplet
+        let osArchMatchRegexForm = `(${osArchMatch.join('|')})`
+        let osArchRegex = new RegExp(`${osArchMatchRegexForm}`);
+
+        let vendorRegex = new RegExp(`(apple|linux|pc|unknown)?`) // vendor may not be specified
+
         let osMatchRegexForm = `(${osMatch.join('|')})`
-        let re = new RegExp(`${osMatchRegexForm}.*${osMatchRegexForm}.*${extMatchRegexForm}`)
+        let osRegex = new RegExp(`${osMatchRegexForm}`);
+
+        let libcRegex = new RegExp(`(gnu|glibc|musl)?`); // libc calling convention may not be specified
+
+        let extensionRegex = new RegExp(`${extMatchRegexForm}$`)
+
+        // Normalize the project name
+        let normalizedProjectName = project.toLowerCase();
+
+        // Attempt to find the asset, with matches for arch, vendor, os, libc and extension as appropriate
         let asset = getReleaseUrl.data.assets.find(obj => {
-            core.info(`searching for ${obj.name} with ${re.source}`)
-            let normalized_obj_name = obj.name.toLowerCase()
-            return re.test(normalized_obj_name)
+            let normalized = obj.name.toLowerCase()
+            core.info(`checking for arch/vendor/os/glibc triple matches for (normalized) asset [${normalized}]`)
+
+            return normalized.includes(normalizedProjectName)
+            && osArchRegex.test(normalized)
+            && vendorRegex.test(normalized)
+            && osRegex.test(normalized)
+            && libcRegex.test(normalized)
+            && extensionRegex.test(normalized)
         })
 
         if (!asset) {

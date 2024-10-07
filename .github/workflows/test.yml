@@ -191,3 +191,23 @@ jobs:
           platform: ubuntu
           cache: enable
       - run: sui --version
+
+  wrpc: # Example of a project with artifacts not named the same as the main project
+    strategy:
+      matrix:
+        version: [ "latest" ]
+        runs-on: [ "ubuntu-latest" ]
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v1
+      - run: npm ci
+      - run: npm run build
+      - uses: ./
+        with:
+          repo: bytecodealliance/wrpc
+          project: wit-bindgen-wrpc
+          extension-matching: disable
+          rename-to: wit-bindgen-wrpc
+          chmod: 0755
+          cache: enable
+      - run: wit-bindgen-wrpc --version
